@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import postgres from 'postgres'
-import { DeleteObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 const sql = postgres(process.env.DATABASE_URL!, { prepare: false })
@@ -23,6 +23,26 @@ app.get('/memes', async c => {
   const rows = await sql`SELECT m.id,m.storage_key,m.mime_type,m.created_at,COALESCE(sum(s.copies * power(2::float, -(current_date-s.day)::float/7)),0)+5*power(2::float,-date_part('epoch',now()-m.created_at)/86400/3) AS score FROM memes m LEFT JOIN daily_copy_stats s ON s.meme_id=m.id WHERE m.deleted_at IS NULL GROUP BY m.id ORDER BY score DESC,m.created_at DESC,m.id DESC LIMIT 250`
   return c.json({ memes: rows.map(m => ({ id:m.id,imageUrl:publicUrl(m.storage_key),mimeType:m.mime_type,createdAt:m.created_at,score:Number(m.score) })) })
 })
+// CORS-safe fallback for copying Object Storage photos as PNG.
+app.get('/memes/:id/image', async c => {
+  const id = c.req.param('id')
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return error(c, 'Geçersiz fotoğraf.', 400)
+  const [meme] = await sql.unsafe('SELECT storage_key, mime_type FROM memes WHERE id = $1::uuid AND deleted_at IS NULL LIMIT 1', [id])
+  if (!meme) return error(c, 'Fotoğraf bulunamadı.', 404)
+  try {
+    const response = await s3().send(new GetObjectCommand({ Bucket: bucket, Key: meme.storage_key }))
+    const bytes = await response.Body?.transformToByteArray()
+    if (!bytes) return error(c, 'Fotoğraf okunamadı.', 502)
+    return c.body(bytes as any, 200, {
+      'Content-Type': meme.mime_type,
+      'Cache-Control': 'private, max-age=3600',
+      'X-Content-Type-Options': 'nosniff'
+    })
+  } catch {
+    return error(c, 'Fotoğraf alınamadı.', 502)
+  }
+})
+
 app.post('/uploads', async c => {
   if (!await allow(c,'upload',20)) return error(c,'Çok fazla yükleme denemesi.',429)
   const form=await c.req.raw.formData().catch(()=>null), file=form?.get('file') as File | null; if(!file||typeof file.arrayBuffer!=='function'||!types.has(file.type)||file.size<1||file.size>MAX)return error(c,'JPEG, PNG, WebP veya GIF seçin (en çok 12 MB).')
