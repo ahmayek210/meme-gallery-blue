@@ -10,7 +10,8 @@ const app = new Hono()
 const types = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'])
 const MAX = 12 * 1024 * 1024, bucket = 'memes'
 const error = (c: any, message: string, status = 400) => c.json({ message }, status)
-const publicUrl = (key: string) => `${env.AWS_ENDPOINT_URL_S3.replace(/\/$/, '')}/${key}`
+// Neon public-read URLs always include both the bucket and the stored object key.
+const publicUrl = (key: string) => `${env.AWS_ENDPOINT_URL_S3.replace(/\/$/, '')}/${bucket}/${key}`
 const s3 = () => new S3Client({ region: env.AWS_REGION, endpoint: env.AWS_ENDPOINT_URL_S3, forcePathStyle: true, credentials: { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY } })
 app.use('*', cors({ origin: () => env.ALLOWED_ORIGIN || '*', allowHeaders: ['Content-Type'], allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'], maxAge: 86400 }))
 async function allow(c: any, action: string, limit: number) {
